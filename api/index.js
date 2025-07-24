@@ -1,260 +1,252 @@
 const express = require('express');
-const app = express();
-
 const cors = require('cors');
 const jwt = require('jsonwebtoken');
+const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
+require('dotenv').config();
 
-require('dotenv').config()
-
+const app = express();
 const port = process.env.PORT || 5100;
 
-// middleware
+// Enhanced CORS configuration
 app.use(cors({
   origin: ['http://localhost:5173', 'https://your-frontend-domain.com'],
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization']
+  allowedHeaders: ['Content-Type', 'Authorization', 'x-access-token']
 }));
 
-app.use(express.json());
-app.get("/",(req,res)=>{
-    res.send('boss is sitting on port 5100');
-})
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
-app.listen(port,()=>{
-    console.log(`Boss is sitting on port ${port}`);
-})
-
-
-// mongodb+srv://zubaerislam703:vhaDZyizwjRL3tES@cluster0.obp5iwu.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0
-
-
-
-const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
+// MongoDB Connection with enhanced options
 const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@cluster0.obp5iwu.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0`;
-
-// Create a MongoClient with a MongoClientOptions object to set the Stable API version
 const client = new MongoClient(uri, {
   serverApi: {
     version: ServerApiVersion.v1,
     strict: true,
     deprecationErrors: true,
-
-  }
+  },
+  maxPoolSize: 50,
+  wtimeoutMS: 2500,
+  connectTimeoutMS: 10000
 });
 
-async function run() {
-  try {
-    // Connect the client to the server	(optional starting in v4.7)
-    await client.connect();
-    
+// JWT Middleware with enhanced security
+const verifyToken = (req, res, next) => {
+  const authHeader = req.headers['authorization'] || req.headers['x-access-token'];
+  if (!authHeader) {
+    return res.status(401).json({ 
+      success: false,
+      message: "Authorization token missing"
+    });
+  }
 
-    const userCollection = client.db("Doctor-House").collection("users");
-    const cartCollection = client.db("Doctor-House").collection("carts");
-    const menuCollection = client.db("Doctor-House").collection("menu")
+  const token = authHeader.split(' ')[1];
+  if (!token) {
+    return res.status(401).json({ 
+      success: false,
+      message: "Malformed token"
+    });
+  }
 
-
-    // jwt related api
-    app.post('/jwt',async(req,res)=> {
-      const user = req.body;
-      const token = jwt.sign(user,process.env.ACCESS_TOKEN_SECRET,{
-        expiresIn: '1h'
+  jwt.verify(token, process.env.ACCESS_TOKEN_SECRET, (err, decoded) => {
+    if (err) {
+      return res.status(401).json({ 
+        success: false,
+        message: "Invalid or expired token"
       });
-      res.send({token});
-    })
-
-    // middlewares
-    const verifyToken = (req,res,next)=> {
-      console.log("inside verify token",req.headers.authorization);
-      if(!req.headers.authorization){
-        return res.status(401).send({message:"unauthorized access"});
-
-      }
-      const token = req.headers.authorization.split(' ')[1]; // fixed the split
-      jwt.verify(token,process.env.ACCESS_TOKEN_SECRET,(err,decoded)=>{
-        if(err){
-          return res.status(401).send({message:"unauthorized"});
-          
-        }
-        req.decoded = decoded;
-        next();
-      });
-    };
-
-
-    // use verify admin after verify token
-    const verifyAdmin = async(req,res,next)=> {
-      const email = req.decoded.email;
-      const query = {email: email};
-      const user = await userCollection.findOne(query);
-      const isAdmin = user?.role === 'admin';
-      if(!isAdmin){
-        return res.status(403).send({message:'forbidden access'});
-      }
-      next();
     }
+    req.decoded = decoded;
+    next();
+  });
+};
 
-    // users related api
-    app.get('/users',verifyToken,verifyAdmin,async(req,res)=> {
-        const result = await userCollection.find().toArray();
-        console.log(req.headers);
-        res.send(result);
-    })
+// Admin verification middleware
+const verifyAdmin = async (req, res, next) => {
+  try {
+    const user = await client.db("Doctor-House")
+      .collection("users")
+      .findOne({ email: req.decoded.email });
+      
+    if (!user || user.role !== 'admin') {
+      return res.status(403).json({ 
+        success: false,
+        message: "Admin privileges required"
+      });
+    }
+    next();
+  } catch (error) {
+    console.error("Admin verification error:", error);
+    res.status(500).json({ 
+      success: false,
+      message: "Internal server error during admin verification"
+    });
+  }
+};
 
-    app.get('/users/admin/:email',verifyToken,async(req,res)=>{
-      const email = req.params.email;
-      if(email!=req.decoded.email){
-        return res.status(403).send({message:'forbidden access'});
-      }
-      const query = {email: email};
-      const user = await userCollection.findOne(query);
-      let admin = false;
-      if(user){
-        admin = user?.role === 'admin';
-      }
-      res.send({admin});
-    })
+// Database connection and route setup
+async function setupDatabaseAndRoutes() {
+  try {
+    await client.connect();
+    console.log("Successfully connected to MongoDB!");
 
-    app.post('/users',async(req,res)=> {
+    const db = client.db("Doctor-House");
+    const userCollection = db.collection("users");
+    const cartCollection = db.collection("carts");
+    const menuCollection = db.collection("menu");
+
+    // JWT Authentication
+    app.post('/api/jwt', async (req, res) => {
+      try {
         const user = req.body;
-        // insert email if user does not exists
-        // you can do this many ways(1.email uniqye, 2.upsert , 3.simple checking)
-        const query = {email: user.email}
-        const existingUser = await userCollection.findOne(query);
-        if(existingUser){
-            return res.send({message: 'user already exists', insertedId:null})
-        }
-        const result = await userCollection.insertOne(user);
-        res.send(result);
-    })
-
-
-    app.patch('/users/admin/:id',verifyToken,verifyAdmin,async(req,res)=>{
-      const id = req.params.id;
-      const filter = {_id: new ObjectId(id)};
-      const updateDoc = {
-        $set: {
-          role:'admin'
-        }
+        const token = jwt.sign(
+          { email: user.email }, 
+          process.env.ACCESS_TOKEN_SECRET, 
+          { expiresIn: '1h' }
+        );
+        
+        res.json({ 
+          success: true,
+          token,
+          expiresIn: 3600
+        });
+      } catch (error) {
+        console.error("JWT generation error:", error);
+        res.status(500).json({ 
+          success: false,
+          message: "Failed to generate token"
+        });
       }
-      const result = await userCollection.updateOne(filter,updateDoc)
-      res.send(result);
-    })
- 
+    });
 
-    app.delete('/users/:id',verifyToken,verifyAdmin,async(req,res)=>{
-      const id = req.params.id;
-      const query = {_id: new ObjectId(id)}
-      const result = await userCollection.deleteOne(query);
-      res.send(result);
-    })
+    // User Management Endpoints
+    app.get('/api/users', verifyToken, verifyAdmin, async (req, res) => {
+      try {
+        const users = await userCollection.find().toArray();
+        res.json({ 
+          success: true,
+          data: users 
+        });
+      } catch (error) {
+        console.error("Error fetching users:", error);
+        res.status(500).json({ 
+          success: false,
+          message: "Failed to fetch users"
+        });
+      }
+    });
 
-
-
-    // userName
-
-    app.get('/users/username/:username',async(req,res)=>{
-      const username = req.params.username;
-      try{
-        const user = await userCollection.findOne({userName:username});
-
-        if(!user){
-          return res.status(404).send({message:'Username not found'})
+    // Cart Endpoints
+    app.get('/api/carts', verifyToken, async (req, res) => {
+      try {
+        if (req.query.email !== req.decoded.email) {
+          return res.status(403).json({ 
+            success: false,
+            message: "Unauthorized access to cart"
+          });
         }
-        res.send({email: user.email});   // return matched email
 
+        const carts = await cartCollection.find({ 
+          email: req.query.email 
+        }).toArray();
+
+        res.json({ 
+          success: true,
+          data: carts 
+        });
+      } catch (error) {
+        console.error("Error fetching cart:", error);
+        res.status(500).json({ 
+          success: false,
+          message: "Failed to fetch cart items"
+        });
       }
-      catch(error){
-        console.error("Error fatching email by username: ",error);
-        res.status(500).send({message:'Internal Server Error'});
-      }
-    })
+    });
 
-
-
-
-    // carts collection
-
-    app.post('/carts',async(req,res)=> {
-      const cartItem = req.body;
-      const result = await cartCollection.insertOne(cartItem);
-      res.send(result);
-    })
-
-    app.delete('/carts/:id',async(req,res)=> {
-      const id = req.params.id;
-      const query = {_id: new ObjectId(id)}
-      const result = await cartCollection.deleteOne(query);
-      res.send(result);
-    })
-
-    app.get('/carts',async(req,res)=> {
-      // const result = await cartCollection.find().toArray();
-      const email = req.query.email;
-      const query = {email: email}
-      const result = await cartCollection.find(query).toArray();
-      res.send(result);
-
-    })
-
-
-    // menu related api
-    app.get('/menu',async(req,res)=> {
-      const result = await menuCollection.find().toArray();
-      res.send(result);
-    })
-
-    app.get('/menu/:id',async(req,res)=>{
-      const id = req.params.id;
-      const query = {_id: new ObjectId(id)}
-      const result = await menuCollection.findOne(query);
-      res.send(result);
-    })
-
-    app.post('/menu',verifyToken,verifyAdmin,async(req,res)=>{
-      const item = req.body;
-      const result = await menuCollection.insertOne(item);
-      res.send(result);
-    })
-
-    app.patch('/menu/:id',async(req,res)=> {
-      const item = req.body;
-      const id = req.params.id;
-      const filter = {_id: new ObjectId(id)}
-      const updateDoc = {
-        $set: {
-          name:item.name,
-          image:item.image,
-          price:item.price,
-          specialist:item.specialist,
-          locationn:item.locationn,
-          available: item.available,
-          details:item.details
+    // Menu Endpoints
+    app.get('/api/menu', async (req, res) => {
+      try {
+        let query = {};
+        if (req.query.specialist) {
+          query.specialist = req.query.specialist;
         }
+        
+        const menuItems = await menuCollection.find(query).toArray();
+        res.json({ 
+          success: true,
+          data: menuItems 
+        });
+      } catch (error) {
+        console.error("Error fetching menu:", error);
+        res.status(500).json({ 
+          success: false,
+          message: "Failed to fetch menu items"
+        });
       }
-      const result = await menuCollection.updateOne(filter,updateDoc)
-      res.send(result);
-    })
+    });
 
-    app.delete('/menu/:id',verifyToken,verifyAdmin,async(req,res)=>{
-      const id = req.params.id;
-      const query = {_id: new ObjectId(id)}
-      const result = await menuCollection.deleteOne(query)
-      res.send(result);
-    })
+    // Health Check Endpoint
+    app.get('/api/health', async (req, res) => {
+      try {
+        await db.command({ ping: 1 });
+        res.json({ 
+          success: true,
+          message: "Server and database are healthy",
+          timestamp: new Date()
+        });
+      } catch (error) {
+        console.error("Health check failed:", error);
+        res.status(500).json({ 
+          success: false,
+          message: "Database connection failed"
+        });
+      }
+    });
 
+    // Root endpoint
+    app.get('/', (req, res) => {
+      res.json({ 
+        success: true,
+        message: "Doctor House API is running",
+        version: "1.0.0",
+        documentation: "https://your-docs-url.com"
+      });
+    });
 
+    // Handle 404
+    app.use((req, res) => {
+      res.status(404).json({ 
+        success: false,
+        message: "Endpoint not found" 
+      });
+    });
 
-   
-    // Send a ping to confirm a successful connection
-    await client.db("admin").command({ ping: 1 });
-    console.log("Pinged your deployment. You successfully connected to MongoDB!");
-     module.exports = app;
-  } finally {
-    // Ensures that the client will close when you finish/error
-    // await client.close();
+    // Global error handler
+    app.use((err, req, res, next) => {
+      console.error("Global error:", err);
+      res.status(500).json({ 
+        success: false,
+        message: "Internal server error",
+        error: process.env.NODE_ENV === 'development' ? err.message : undefined
+      });
+    });
+
+  } catch (error) {
+    console.error("Database connection failed:", error);
+    process.exit(1);
   }
 }
-run().catch(console.dir);
 
-export default app; 
+// Initialize the application
+setupDatabaseAndRoutes().catch(console.error);
+
+// Export for Vercel
+module.exports = app;
+
+// Local development
+if (require.main === module) {
+  app.listen(port, () => {
+    console.log(`Server running on port ${port}`);
+    console.log(`Docs available at http://localhost:${port}`);
+  });
+}
