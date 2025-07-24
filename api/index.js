@@ -12,233 +12,171 @@ app.use(cors({
   origin: ['http://localhost:5173', 'https://your-frontend-domain.com'],
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'x-access-token']
+  allowedHeaders: ['Content-Type', 'Authorization']
 }));
 
-app.use(express.json({ limit: '50mb' }));
-app.use(express.urlencoded({ extended: true, limit: '50mb' }));
+app.use(express.json());
 
-// MongoDB Connection with enhanced options
+// MongoDB Connection
 const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@cluster0.obp5iwu.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0`;
 const client = new MongoClient(uri, {
   serverApi: {
     version: ServerApiVersion.v1,
     strict: true,
     deprecationErrors: true,
-  },
-  maxPoolSize: 50,
-  wtimeoutMS: 2500,
-  connectTimeoutMS: 10000
+  }
 });
 
-// JWT Middleware with enhanced security
-const verifyToken = (req, res, next) => {
-  const authHeader = req.headers['authorization'] || req.headers['x-access-token'];
-  if (!authHeader) {
-    return res.status(401).json({ 
-      success: false,
-      message: "Authorization token missing"
-    });
-  }
-
-  const token = authHeader.split(' ')[1];
-  if (!token) {
-    return res.status(401).json({ 
-      success: false,
-      message: "Malformed token"
-    });
-  }
-
-  jwt.verify(token, process.env.ACCESS_TOKEN_SECRET, (err, decoded) => {
-    if (err) {
-      return res.status(401).json({ 
-        success: false,
-        message: "Invalid or expired token"
-      });
-    }
-    req.decoded = decoded;
-    next();
-  });
-};
-
-// Admin verification middleware
-const verifyAdmin = async (req, res, next) => {
-  try {
-    const user = await client.db("Doctor-House")
-      .collection("users")
-      .findOne({ email: req.decoded.email });
-      
-    if (!user || user.role !== 'admin') {
-      return res.status(403).json({ 
-        success: false,
-        message: "Admin privileges required"
-      });
-    }
-    next();
-  } catch (error) {
-    console.error("Admin verification error:", error);
-    res.status(500).json({ 
-      success: false,
-      message: "Internal server error during admin verification"
-    });
-  }
-};
-
-// Database connection and route setup
-async function setupDatabaseAndRoutes() {
+// API Routes
+async function run() {
   try {
     await client.connect();
-    console.log("Successfully connected to MongoDB!");
+    console.log("Connected to MongoDB");
 
     const db = client.db("Doctor-House");
     const userCollection = db.collection("users");
     const cartCollection = db.collection("carts");
     const menuCollection = db.collection("menu");
 
-    // JWT Authentication
+    // JWT API
     app.post('/api/jwt', async (req, res) => {
-      try {
-        const user = req.body;
-        const token = jwt.sign(
-          { email: user.email }, 
-          process.env.ACCESS_TOKEN_SECRET, 
-          { expiresIn: '1h' }
-        );
-        
-        res.json({ 
-          success: true,
-          token,
-          expiresIn: 3600
-        });
-      } catch (error) {
-        console.error("JWT generation error:", error);
-        res.status(500).json({ 
-          success: false,
-          message: "Failed to generate token"
-        });
-      }
+      const user = req.body;
+      const token = jwt.sign(user, process.env.ACCESS_TOKEN_SECRET, { expiresIn: '1h' });
+      res.send({ token });
     });
 
-    // User Management Endpoints
+    // Middleware
+    const verifyToken = (req, res, next) => {
+      const authHeader = req.headers.authorization;
+      if (!authHeader) {
+        return res.status(401).send({ message: "Unauthorized access" });
+      }
+      const token = authHeader.split(' ')[1];
+      jwt.verify(token, process.env.ACCESS_TOKEN_SECRET, (err, decoded) => {
+        if (err) return res.status(401).send({ message: "Unauthorized" });
+        req.decoded = decoded;
+        next();
+      });
+    };
+
+    const verifyAdmin = async (req, res, next) => {
+      const email = req.decoded.email;
+      const user = await userCollection.findOne({ email });
+      if (!user || user.role !== 'admin') {
+        return res.status(403).send({ message: 'Forbidden access' });
+      }
+      next();
+    };
+
+    // Users API
     app.get('/api/users', verifyToken, verifyAdmin, async (req, res) => {
+      const result = await userCollection.find().toArray();
+      res.send(result);
+    });
+
+    app.get('/api/users/admin/:email', verifyToken, async (req, res) => {
+      const email = req.params.email;
+      if (email !== req.decoded.email) {
+        return res.status(403).send({ message: 'Forbidden access' });
+      }
+      const user = await userCollection.findOne({ email });
+      res.send({ admin: user?.role === 'admin' });
+    });
+
+    app.post('/api/users', async (req, res) => {
+      const user = req.body;
+      const existingUser = await userCollection.findOne({ email: user.email });
+      if (existingUser) {
+        return res.send({ message: 'User already exists', insertedId: null });
+      }
+      const result = await userCollection.insertOne(user);
+      res.send(result);
+    });
+
+    app.patch('/api/users/admin/:id', verifyToken, verifyAdmin, async (req, res) => {
+      const id = req.params.id;
+      const result = await userCollection.updateOne(
+        { _id: new ObjectId(id) },
+        { $set: { role: 'admin' } }
+      );
+      res.send(result);
+    });
+
+    app.delete('/api/users/:id', verifyToken, verifyAdmin, async (req, res) => {
+      const id = req.params.id;
+      const result = await userCollection.deleteOne({ _id: new ObjectId(id) });
+      res.send(result);
+    });
+
+    app.get('/api/users/username/:username', async (req, res) => {
       try {
-        const users = await userCollection.find().toArray();
-        res.json({ 
-          success: true,
-          data: users 
-        });
+        const user = await userCollection.findOne({ userName: req.params.username });
+        if (!user) return res.status(404).send({ message: 'Username not found' });
+        res.send({ email: user.email });
       } catch (error) {
-        console.error("Error fetching users:", error);
-        res.status(500).json({ 
-          success: false,
-          message: "Failed to fetch users"
-        });
+        console.error("Error fetching email by username:", error);
+        res.status(500).send({ message: 'Internal Server Error' });
       }
     });
 
-    // Cart Endpoints
-    app.get('/api/carts', verifyToken, async (req, res) => {
-      try {
-        if (req.query.email !== req.decoded.email) {
-          return res.status(403).json({ 
-            success: false,
-            message: "Unauthorized access to cart"
-          });
-        }
-
-        const carts = await cartCollection.find({ 
-          email: req.query.email 
-        }).toArray();
-
-        res.json({ 
-          success: true,
-          data: carts 
-        });
-      } catch (error) {
-        console.error("Error fetching cart:", error);
-        res.status(500).json({ 
-          success: false,
-          message: "Failed to fetch cart items"
-        });
-      }
+    // Carts API
+    app.post('/api/carts', async (req, res) => {
+      const result = await cartCollection.insertOne(req.body);
+      res.send(result);
     });
 
-    // Menu Endpoints
+    app.delete('/api/carts/:id', async (req, res) => {
+      const result = await cartCollection.deleteOne({ _id: new ObjectId(req.params.id) });
+      res.send(result);
+    });
+
+    app.get('/api/carts', async (req, res) => {
+      const result = await cartCollection.find({ email: req.query.email }).toArray();
+      res.send(result);
+    });
+
+    // Menu API
     app.get('/api/menu', async (req, res) => {
-      try {
-        let query = {};
-        if (req.query.specialist) {
-          query.specialist = req.query.specialist;
-        }
-        
-        const menuItems = await menuCollection.find(query).toArray();
-        res.json({ 
-          success: true,
-          data: menuItems 
-        });
-      } catch (error) {
-        console.error("Error fetching menu:", error);
-        res.status(500).json({ 
-          success: false,
-          message: "Failed to fetch menu items"
-        });
-      }
+      const result = await menuCollection.find().toArray();
+      res.send(result);
     });
 
-    // Health Check Endpoint
-    app.get('/api/health', async (req, res) => {
-      try {
-        await db.command({ ping: 1 });
-        res.json({ 
-          success: true,
-          message: "Server and database are healthy",
-          timestamp: new Date()
-        });
-      } catch (error) {
-        console.error("Health check failed:", error);
-        res.status(500).json({ 
-          success: false,
-          message: "Database connection failed"
-        });
-      }
+    app.get('/api/menu/:id', async (req, res) => {
+      const result = await menuCollection.findOne({ _id: new ObjectId(req.params.id) });
+      res.send(result);
     });
 
-    // Root endpoint
+    app.post('/api/menu', verifyToken, verifyAdmin, async (req, res) => {
+      const result = await menuCollection.insertOne(req.body);
+      res.send(result);
+    });
+
+    app.patch('/api/menu/:id', async (req, res) => {
+      const result = await menuCollection.updateOne(
+        { _id: new ObjectId(req.params.id) },
+        { $set: req.body }
+      );
+      res.send(result);
+    });
+
+    app.delete('/api/menu/:id', verifyToken, verifyAdmin, async (req, res) => {
+      const result = await menuCollection.deleteOne({ _id: new ObjectId(req.params.id) });
+      res.send(result);
+    });
+
+    // Health check
     app.get('/', (req, res) => {
-      res.json({ 
-        success: true,
-        message: "Doctor House API is running",
-        version: "1.0.0",
-        documentation: "https://your-docs-url.com"
-      });
+      res.send('Server is running');
     });
 
-    // Handle 404
-    app.use((req, res) => {
-      res.status(404).json({ 
-        success: false,
-        message: "Endpoint not found" 
-      });
-    });
-
-    // Global error handler
-    app.use((err, req, res, next) => {
-      console.error("Global error:", err);
-      res.status(500).json({ 
-        success: false,
-        message: "Internal server error",
-        error: process.env.NODE_ENV === 'development' ? err.message : undefined
-      });
-    });
-
+    await db.command({ ping: 1 });
+    console.log("Pinged MongoDB deployment");
   } catch (error) {
-    console.error("Database connection failed:", error);
-    process.exit(1);
+    console.error(error);
   }
 }
 
-// Initialize the application
-setupDatabaseAndRoutes().catch(console.error);
+run().catch(console.error);
 
 // Export for Vercel
 module.exports = app;
@@ -247,6 +185,5 @@ module.exports = app;
 if (require.main === module) {
   app.listen(port, () => {
     console.log(`Server running on port ${port}`);
-    console.log(`Docs available at http://localhost:${port}`);
   });
 }
