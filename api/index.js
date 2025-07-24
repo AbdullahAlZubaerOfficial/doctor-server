@@ -9,7 +9,13 @@ require('dotenv').config()
 const port = process.env.PORT || 5100;
 
 // middleware
-app.use(cors());
+app.use(cors({
+  origin: ['http://localhost:5173', 'https://your-frontend-domain.com'],
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization']
+}));
+
 app.use(express.json());
 app.get("/",(req,res)=>{
     res.send('boss is sitting on port 5100');
@@ -243,10 +249,12 @@ async function run() {
     // Send a ping to confirm a successful connection
     await client.db("admin").command({ ping: 1 });
     console.log("Pinged your deployment. You successfully connected to MongoDB!");
-     module.export = app;
+     module.exports = app;
   } finally {
     // Ensures that the client will close when you finish/error
     // await client.close();
   }
 }
 run().catch(console.dir);
+
+export default app; 
