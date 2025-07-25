@@ -246,50 +246,46 @@ async function run() {
 
 // appointment Collection api
 
-app.get('/appointment',async(req,res)=> {
-  const result = await menuCollection.find().toArray();
+app.get('/appointment', async (req, res) => {
+  const result = await appointmentCollection.find().toArray();
   res.send(result);
-})
+});
 
-
-app.get('/appointment/:id',async(req,res)=> {
+app.get('/appointment/:id', async (req, res) => {
   const id = req.params.id;
-  const query = {_id: new ObjectId(id)}
+  const query = { _id: new ObjectId(id) };
   const result = await appointmentCollection.findOne(query);
   res.send(result);
-})
+});
 
-
-app.post('/appointment',async(req,res)=> {
+app.post('/appointment', async (req, res) => {
   const item = req.body;
   const result = await appointmentCollection.insertOne(item);
   res.send(result);
-})
+});
 
-app.patch('/appointment/:id',async(req,res)=> {
+app.patch('/appointment/:id', async (req, res) => {
   const item = req.body;
   const id = req.params.id;
-  const filter = {_id: new ObjectId(id)}
+  const filter = { _id: new ObjectId(id) };
   const updateDoc = {
     $set: {
-      patientName : item.name,
+      patientName: item.name,
       patientAge: item.age,
       patientEmail: item.email,
       patientPhone: item.phone,
       patientDate: item.date,
       appointmentTime: item.time,
-      message:item.message,
-
+      message: item.message,
     }
   };
   const result = await appointmentCollection.updateOne(filter, updateDoc);
   res.send(result);
 });
 
-
-app.delete('/appointment/:id', async(req,res)=> {
+app.delete('/appointment/:id', async (req, res) => {
   const id = req.params.id;
-  const query = {_id: new ObjectId(id)};
+  const query = { _id: new ObjectId(id) };
   const result = await appointmentCollection.deleteOne(query);
   res.send(result);
 });
