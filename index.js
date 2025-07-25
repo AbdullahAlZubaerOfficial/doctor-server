@@ -264,7 +264,7 @@ const verifyRole = (role) => {
 
 // appointment Collection api
 // Get all appointments for the logged-in user
-app.get('/appointments', verifyToken, async (req, res) => {
+app.get('/appointments', async (req, res) => {
   try {
     const email = req.decoded.email;
     const result = await appointmentCollection.find({ patientEmail: email }).toArray();
@@ -288,7 +288,7 @@ app.get('/all-appointments', verifyToken, verifyAdmin, async (req, res) => {
 });
 
 // Create new appointment
-app.post('/appointments', verifyToken, async (req, res) => {
+app.post('/appointments', async (req, res) => {
   try {
     const appointment = req.body;
     // Validate the appointment data
