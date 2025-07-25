@@ -63,22 +63,40 @@ async function run() {
     })
 
     // middlewares
-    const verifyToken = (req,res,next)=> {
-      console.log("inside verify token",req.headers.authorization);
-      if(!req.headers.authorization){
-        return res.status(401).send({message:"unauthorized access"});
+   // Enhanced verifyToken middleware
+const verifyToken = (req, res, next) => {
+  const authHeader = req.headers.authorization;
+  
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return res.status(401).send({ message: "Unauthorized access" });
+  }
 
-      }
-      const token = req.headers.authorization.split(' ')[1]; // fixed the split
-      jwt.verify(token,process.env.ACCESS_TOKEN_SECRET,(err,decoded)=>{
-        if(err){
-          return res.status(401).send({message:"unauthorized"});
-          
-        }
-        req.decoded = decoded;
-        next();
-      });
-    };
+  const token = authHeader.split(' ')[1];
+  
+  jwt.verify(token, process.env.ACCESS_TOKEN_SECRET, (err, decoded) => {
+    if (err) {
+      return res.status(401).send({ message: "Invalid or expired token" });
+    }
+    req.decoded = decoded;
+    next();
+  });
+};
+
+// Role-based access control
+const verifyRole = (role) => {
+  return async (req, res, next) => {
+    const email = req.decoded.email;
+    const user = await userCollection.findOne({ email });
+    
+    if (!user || user.role !== role) {
+      return res.status(403).send({ message: `Forbidden: ${role} access required` });
+    }
+    next();
+  };
+};
+
+// Now you can use:
+// verifyRole('admin'), verifyRole('doctor'), etc.
 
 
     // use verify admin after verify token
@@ -245,34 +263,49 @@ async function run() {
 
 
 // appointment Collection api
-
-app.get('/appointment', async (req, res) => {
-
+// Get all appointments for the logged-in user
+app.get('/appointments', verifyToken, async (req, res) => {
   try {
-    const userEmail = req.user.email;
-    const result = await appointmentCollection.find({email: userEmail}).toArray();
+    const email = req.decoded.email;
+    const result = await appointmentCollection.find({ patientEmail: email }).toArray();
     res.send(result);
-
   } catch (error) {
-    console.error("Error fetching appointments: ",error);
-    res.status(500).send({error:"Internal server error"});
+    console.error("Error fetching appointments:", error);
+    res.status(500).send({ error: "Internal server error" });
   }
-
-  // const result = await appointmentCollection.find().toArray();
-  res.send(result);
 });
 
-app.get('/appointment/:id', async (req, res) => {
-  const id = req.params.id;
-  const query = { _id: new ObjectId(id) };
-  const result = await appointmentCollection.findOne(query);
-  res.send(result);
+
+// Get all appointments (Admin only)
+app.get('/all-appointments', verifyToken, verifyAdmin, async (req, res) => {
+  try {
+    const result = await appointmentCollection.find().toArray();
+    res.send(result);
+  } catch (error) {
+    console.error("Error fetching all appointments:", error);
+    res.status(500).send({ error: "Internal server error" });
+  }
 });
 
-app.post('/appointment', async (req, res) => {
-  const item = req.body;
-  const result = await appointmentCollection.insertOne(item);
-  res.send(result);
+// Create new appointment
+app.post('/appointments', verifyToken, async (req, res) => {
+  try {
+    const appointment = req.body;
+    // Validate the appointment data
+    if (!appointment.doctorId || !appointment.date) {
+      return res.status(400).send({ error: "Missing required fields" });
+    }
+    
+    // Ensure the appointment belongs to the logged-in user
+    appointment.patientEmail = req.decoded.email;
+    appointment.status = 'pending'; // Default status
+    
+    const result = await appointmentCollection.insertOne(appointment);
+    res.send(result);
+  } catch (error) {
+    console.error("Error creating appointment:", error);
+    res.status(500).send({ error: "Internal server error" });
+  }
 });
 
 app.patch('/appointment/:id', async (req, res) => {
