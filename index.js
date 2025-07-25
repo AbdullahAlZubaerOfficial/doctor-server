@@ -247,7 +247,18 @@ async function run() {
 // appointment Collection api
 
 app.get('/appointment', async (req, res) => {
-  const result = await appointmentCollection.find().toArray();
+
+  try {
+    const userEmail = req.user.email;
+    const result = await appointmentCollection.find({email: userEmail}).toArray();
+    res.send(result);
+
+  } catch (error) {
+    console.error("Error fetching appointments: ",error);
+    res.status(500).send({error:"Internal server error"});
+  }
+
+  // const result = await appointmentCollection.find().toArray();
   res.send(result);
 });
 
