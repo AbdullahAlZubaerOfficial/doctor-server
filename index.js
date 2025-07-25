@@ -82,18 +82,7 @@ const verifyToken = (req, res, next) => {
   });
 };
 
-// Role-based access control
-const verifyRole = (role) => {
-  return async (req, res, next) => {
-    const email = req.decoded.email;
-    const user = await userCollection.findOne({ email });
-    
-    if (!user || user.role !== role) {
-      return res.status(403).send({ message: `Forbidden: ${role} access required` });
-    }
-    next();
-  };
-};
+
 
 // Now you can use:
 // verifyRole('admin'), verifyRole('doctor'), etc.
@@ -264,7 +253,8 @@ const verifyRole = (role) => {
 
 // appointment Collection api
 // Get all appointments for the logged-in user
-app.get('/appointments', async (req, res) => {
+// Appointment API endpoints
+app.get('/appointments', verifyToken, async (req, res) => {
   try {
     const email = req.decoded.email;
     const result = await appointmentCollection.find({ patientEmail: email }).toArray();
@@ -275,30 +265,18 @@ app.get('/appointments', async (req, res) => {
   }
 });
 
-
-// Get all appointments (Admin only)
-app.get('/all-appointments', verifyToken, verifyAdmin, async (req, res) => {
-  try {
-    const result = await appointmentCollection.find().toArray();
-    res.send(result);
-  } catch (error) {
-    console.error("Error fetching all appointments:", error);
-    res.status(500).send({ error: "Internal server error" });
-  }
-});
-
-// Create new appointment
-app.post('/appointments', async (req, res) => {
+app.post('/appointments', verifyToken, async (req, res) => {
   try {
     const appointment = req.body;
-    // Validate the appointment data
-    if (!appointment.doctorId || !appointment.date) {
+    
+    // Validate required fields
+    if (!appointment.doctorId || !appointment.appointmentDate) {
       return res.status(400).send({ error: "Missing required fields" });
     }
     
-    // Ensure the appointment belongs to the logged-in user
+    // Set patient email from authenticated user
     appointment.patientEmail = req.decoded.email;
-    appointment.status = 'pending'; // Default status
+    appointment.status = 'pending';
     
     const result = await appointmentCollection.insertOne(appointment);
     res.send(result);
@@ -308,30 +286,64 @@ app.post('/appointments', async (req, res) => {
   }
 });
 
-app.patch('/appointment/:id', async (req, res) => {
-  const item = req.body;
-  const id = req.params.id;
-  const filter = { _id: new ObjectId(id) };
-  const updateDoc = {
-    $set: {
-      patientName: item.name,
-      patientAge: item.age,
-      patientEmail: item.email,
-      patientPhone: item.phone,
-      patientDate: item.date,
-      appointmentTime: item.time,
-      message: item.message,
+app.patch('/appointments/:id', verifyToken, async (req, res) => {
+  try {
+    const item = req.body;
+    const id = req.params.id;
+    const email = req.decoded.email;
+    
+    // Verify appointment belongs to user
+    const existingAppointment = await appointmentCollection.findOne({ 
+      _id: new ObjectId(id),
+      patientEmail: email
+    });
+    
+    if (!existingAppointment) {
+      return res.status(403).send({ error: "Access denied" });
     }
-  };
-  const result = await appointmentCollection.updateOne(filter, updateDoc);
-  res.send(result);
+
+    const filter = { _id: new ObjectId(id) };
+    const updateDoc = {
+      $set: {
+        patientName: item.name,
+        patientAge: item.age,
+        patientPhone: item.phone,
+        appointmentDate: item.date,
+        appointmentTime: item.time,
+        message: item.message,
+      }
+    };
+    
+    const result = await appointmentCollection.updateOne(filter, updateDoc);
+    res.send(result);
+  } catch (error) {
+    console.error("Error updating appointment:", error);
+    res.status(500).send({ error: "Internal server error" });
+  }
 });
 
-app.delete('/appointment/:id', async (req, res) => {
-  const id = req.params.id;
-  const query = { _id: new ObjectId(id) };
-  const result = await appointmentCollection.deleteOne(query);
-  res.send(result);
+app.delete('/appointments/:id', verifyToken, async (req, res) => {
+  try {
+    const id = req.params.id;
+    const email = req.decoded.email;
+    
+    // Verify appointment belongs to user
+    const existingAppointment = await appointmentCollection.findOne({ 
+      _id: new ObjectId(id),
+      patientEmail: email
+    });
+    
+    if (!existingAppointment) {
+      return res.status(403).send({ error: "Access denied" });
+    }
+
+    const query = { _id: new ObjectId(id) };
+    const result = await appointmentCollection.deleteOne(query);
+    res.send(result);
+  } catch (error) {
+    console.error("Error deleting appointment:", error);
+    res.status(500).send({ error: "Internal server error" });
+  }
 });
 
 
