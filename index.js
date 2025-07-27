@@ -395,7 +395,7 @@ app.patch('/userprofile/:id',async(req,res)=>{
     $set: {
        fullName : item.fullname,
     userName : item.username,
-    
+    userImage: userImage,
     Email: item.email,
     NID: item.nid,
     Gender: item.gender,
