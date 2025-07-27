@@ -54,34 +54,44 @@ async function run() {
     const userProfileCollection = client.db("Doctor-House").collection("userprofile")
 
 
-    // jwt related api
-    app.post('/jwt',async(req,res)=> {
-      const user = req.body;
-      const token = jwt.sign(user,process.env.ACCESS_TOKEN_SECRET,{
-        expiresIn: '1h'
-      });
-      res.send({token});
-    })
+   // jwt related api
+app.post('/jwt', async (req, res) => {
+    const user = req.body;
+    const token = jwt.sign(
+        { email: user.email }, // Only store necessary user info in token
+        process.env.ACCESS_TOKEN_SECRET,
+        { expiresIn: '1h' }
+    );
+    
+    // Set secure HTTP-only cookie
+    res.cookie('token', token, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'strict',
+        maxAge: 3600000 // 1 hour
+    });
+    
+    res.send({ success: true });
+});
 
-    // middlewares
-   // Enhanced verifyToken middleware
+// Token verification middleware
 const verifyToken = (req, res, next) => {
-  const authHeader = req.headers.authorization;
-  
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    return res.status(401).send({ message: "Unauthorized access" });
-  }
-
-  const token = authHeader.split(' ')[1];
-  
-  jwt.verify(token, process.env.ACCESS_TOKEN_SECRET, (err, decoded) => {
-    if (err) {
-      return res.status(401).send({ message: "Invalid or expired token" });
+    // Check for token in cookies first, then Authorization header
+    const token = req.cookies.token || req.headers.authorization?.split(' ')[1];
+    
+    if (!token) {
+        return res.status(401).send({ message: "Unauthorized access" });
     }
-    req.decoded = decoded;
-    next();
-  });
+
+    jwt.verify(token, process.env.ACCESS_TOKEN_SECRET, (err, decoded) => {
+        if (err) {
+            return res.status(401).send({ message: "Invalid or expired token" });
+        }
+        req.user = decoded; // Attach decoded user to request
+        next();
+    });
 };
+
 
 
 
@@ -156,27 +166,55 @@ const verifyToken = (req, res, next) => {
       res.send(result);
     })
 
+    // Check username availability
+app.get('/check-username', verifyToken, async (req, res) => {
+    const { username } = req.query;
+    
+    if (!username || username.length < 3) {
+        return res.status(400).send({ message: "Username must be at least 3 characters" });
+    }
 
+    try {
+        // Check in both user collection and profile collection
+        const existingUser = await userCollection.findOne({ userName: username });
+        const existingProfile = await userProfileCollection.findOne({ username });
+        
+        // If current user is checking their own username, it's available
+        const isCurrentUser = existingUser?.email === req.user.email;
+        
+        res.send({ 
+            available: !existingUser && !existingProfile || isCurrentUser
+        });
+    } catch (error) {
+        console.error("Error checking username:", error);
+        res.status(500).send({ message: "Error checking username availability" });
+    }
+});
 
-    // userName
+// Get user by username
+app.get('/users/username/:username', verifyToken, async (req, res) => {
+    const username = req.params.username;
+    try {
+        const user = await userCollection.findOne({ userName: username });
+        const profile = await userProfileCollection.findOne({ username });
 
-    app.get('/users/username/:username',async(req,res)=>{
-      const username = req.params.username;
-      try{
-        const user = await userCollection.findOne({userName:username});
-
-        if(!user){
-          return res.status(404).send({message:'Username not found'})
+        if (!user && !profile) {
+            return res.status(404).send({ message: 'Username not found' });
         }
-        res.send(user);   // return matched email
-        // res.send({email: user.email});   // return matched email
 
-      }
-      catch(error){
-        console.error("Error fatching email by username: ",error);
-        res.status(500).send({message:'Internal Server Error'});
-      }
-    })
+        // Return minimal public info
+        const response = {
+            username: username,
+            exists: true,
+            isCurrentUser: user?.email === req.user.email
+        };
+
+        res.send(response);
+    } catch (error) {
+        console.error("Error fetching user by username: ", error);
+        res.status(500).send({ message: 'Internal Server Error' });
+    }
+});
 
 
     // ⛑️ get user by email
@@ -367,10 +405,17 @@ app.delete('/appointments/:id', verifyToken, async (req, res) => {
 
 
 // userProfile collection
-app.get('/userprofile',async(req,res)=> {
-  const result = await userProfileCollection.find().toArray();
-  res.send(result);
-})
+app.get('/userprofile', verifyToken, async (req, res) => {
+    try {
+        const result = await userProfileCollection.findOne({ email: req.user.email });
+        if (!result) {
+            return res.status(404).send({ message: "Profile not found" });
+        }
+        res.send(result);
+    } catch (error) {
+        res.status(500).send({ message: "Server error" });
+    }
+});
 
 app.get('/userprofile/:id',async(req,res)=>{
   const id = req.params.id;
@@ -380,11 +425,35 @@ app.get('/userprofile/:id',async(req,res)=>{
 })
 
 
-app.post('/userprofile',async(req,res)=> {
-  const item = req.body;
-  const result = await userProfileCollection.insertOne(item);
-  res.send(result);
-})
+app.post('/userprofile', verifyToken, async (req, res) => {
+    try {
+        const profile = req.body;
+        
+        // Ensure the profile belongs to the authenticated user
+        if (profile.email !== req.user.email) {
+            return res.status(403).send({ message: "Forbidden" });
+        }
+
+        const existingProfile = await userProfileCollection.findOne({ email: profile.email });
+        
+        if (existingProfile) {
+            // Update existing profile
+            const result = await userProfileCollection.updateOne(
+                { email: profile.email },
+                { $set: profile }
+            );
+            res.send(result);
+        } else {
+            // Create new profile
+            profile.createdAt = new Date();
+            const result = await userProfileCollection.insertOne(profile);
+            res.send(result);
+        }
+    } catch (error) {
+        res.status(500).send({ message: "Server error" });
+    }
+});
+
 
 app.patch('/userprofile/:id',async(req,res)=>{
   const item = req.body;
@@ -421,6 +490,7 @@ app.delete('/userprofile/:id',async(req,res,async(req,res)=> {
   const result = await userProfileCollection.deleteOne(query)
   res.send(result);
 }))
+
 
 
 
