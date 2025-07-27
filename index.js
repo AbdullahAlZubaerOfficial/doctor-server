@@ -51,6 +51,7 @@ async function run() {
     const cartCollection = client.db("Doctor-House").collection("carts");
     const menuCollection = client.db("Doctor-House").collection("menu")
     const appointmentCollection = client.db("Doctor-House").collection("appointment")
+    const userProfileCollection = client.db("Doctor-House").collection("userprofile")
 
 
     // jwt related api
@@ -177,6 +178,21 @@ const verifyToken = (req, res, next) => {
       }
     })
 
+
+    // ⛑️ get user by email
+app.get('/updatemyprofile/:email', async (req, res) => {
+  const email = req.params.email;
+  try {
+    const user = await userCollection.findOne({ email });
+    if (!user) {
+      return res.status(404).send({ message: 'User not found' });
+    }
+    res.send(user);
+  } catch (error) {
+    console.error('Error fetching user profile:', error);
+    res.status(500).send({ message: 'Internal server error' });
+  }
+});
 
 
 
@@ -346,6 +362,65 @@ app.delete('/appointments/:id', verifyToken, async (req, res) => {
     res.status(500).send({ error: "Internal server error" });
   }
 });
+
+
+
+
+// userProfile collection
+app.get('/userprofile',async(req,res)=> {
+  const result = await userProfileCollection.find().toArray();
+  res.send(result);
+})
+
+app.get('/userprofile/:id',async(req,res)=>{
+  const id = req.params.id;
+  const query = {_id: new ObjectId(id)}
+  const result = await userProfileCollection.findOne(query);
+  res.send(result);
+})
+
+
+app.post('/userprofile',async(req,res)=> {
+  const item = req.body;
+  const result = await userProfileCollection.insertOne(item);
+  res.send(result);
+})
+
+app.patch('/userprofile/:id',async(req,res)=>{
+  const item = req.body;
+  const id = req.params.id;
+  const filter = {_id: new ObjectId(id)}
+  const updateDoc = {
+   
+    $set: {
+       fullName : item.fullname,
+    userName : item.username,
+    
+    Email: item.email,
+    NID: item.nid,
+    Gender: item.gender,
+    bloodGroup: item.bloodGroup,
+    EmergencyName: item.EmergencyName,
+    EmergencyRelationship: item.EmergencyRelationship,
+    EmergencyNumber: item.EmergencyNumber,
+    }
+
+
+
+  }
+
+  const result = await userProfileCollection.updateOne(filter,updateDoc)
+  res.send(result);
+
+})
+
+
+app.delete('/userprofile/:id',async(req,res,async(req,res)=> {
+  const id = req.params.id;
+  const query = {_id: new ObjectId(id)}
+  const result = await userProfileCollection.deleteOne(query)
+  res.send(result);
+}))
 
 
 
