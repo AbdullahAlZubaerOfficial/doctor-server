@@ -167,7 +167,8 @@ const verifyToken = (req, res, next) => {
         if(!user){
           return res.status(404).send({message:'Username not found'})
         }
-        res.send({email: user.email});   // return matched email
+        res.send(user);   // return matched email
+        // res.send({email: user.email});   // return matched email
 
       }
       catch(error){
