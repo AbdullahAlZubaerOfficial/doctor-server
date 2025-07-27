@@ -461,6 +461,24 @@ app.patch('/userprofile/:id',async(req,res)=>{
 })
 
 
+app.patch('/userprofile', verifyToken, async (req, res) => {
+    try {
+        const email = req.user.email;
+        const profileData = req.body;
+        
+        const result = await userProfileCollection.updateOne(
+            { email },
+            { $set: profileData }
+        );
+        
+        res.send(result);
+    } catch (error) {
+        console.error('Error updating user profile:', error);
+        res.status(500).send({ message: 'Internal server error' });
+    }
+});
+
+
 app.delete('/userprofile/:id',async(req,res,async(req,res)=> {
   const id = req.params.id;
   const query = {_id: new ObjectId(id)}
