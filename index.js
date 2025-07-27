@@ -166,55 +166,27 @@ const verifyToken = (req, res, next) => {
       res.send(result);
     })
 
-    // Check username availability
-app.get('/check-username', verifyToken, async (req, res) => {
-    const { username } = req.query;
-    
-    if (!username || username.length < 3) {
-        return res.status(400).send({ message: "Username must be at least 3 characters" });
-    }
 
-    try {
-        // Check in both user collection and profile collection
-        const existingUser = await userCollection.findOne({ userName: username });
-        const existingProfile = await userProfileCollection.findOne({ username });
-        
-        // If current user is checking their own username, it's available
-        const isCurrentUser = existingUser?.email === req.user.email;
-        
-        res.send({ 
-            available: !existingUser && !existingProfile || isCurrentUser
-        });
-    } catch (error) {
-        console.error("Error checking username:", error);
-        res.status(500).send({ message: "Error checking username availability" });
-    }
-});
 
-// Get user by username
-app.get('/users/username/:username', verifyToken, async (req, res) => {
-    const username = req.params.username;
-    try {
-        const user = await userCollection.findOne({ userName: username });
-        const profile = await userProfileCollection.findOne({ username });
+    // userName
 
-        if (!user && !profile) {
-            return res.status(404).send({ message: 'Username not found' });
+    app.get('/users/username/:username',async(req,res)=>{
+      const username = req.params.username;
+      try{
+        const user = await userCollection.findOne({userName:username});
+
+        if(!user){
+          return res.status(404).send({message:'Username not found'})
         }
+        res.send(user);   // return matched email
+        // res.send({email: user.email});   // return matched email
 
-        // Return minimal public info
-        const response = {
-            username: username,
-            exists: true,
-            isCurrentUser: user?.email === req.user.email
-        };
-
-        res.send(response);
-    } catch (error) {
-        console.error("Error fetching user by username: ", error);
-        res.status(500).send({ message: 'Internal Server Error' });
-    }
-});
+      }
+      catch(error){
+        console.error("Error fatching email by username: ",error);
+        res.status(500).send({message:'Internal Server Error'});
+      }
+    })
 
 
     // ⛑️ get user by email
