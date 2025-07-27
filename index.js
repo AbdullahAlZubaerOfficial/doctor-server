@@ -378,15 +378,19 @@ app.delete('/appointments/:id', verifyToken, async (req, res) => {
 
 // userProfile collection
 app.get('/userprofile', verifyToken, async (req, res) => {
-    try {
-        const result = await userProfileCollection.findOne({ email: req.user.email });
-        if (!result) {
-            return res.status(404).send({ message: "Profile not found" });
-        }
-        res.send(result);
-    } catch (error) {
-        res.status(500).send({ message: "Server error" });
+  try {
+    const email = req.user.email; // From verified token
+    const profile = await userProfileCollection.findOne({ email });
+    
+    if (!profile) {
+      return res.status(404).send({ message: 'Profile not found' });
     }
+    
+    res.send(profile);
+  } catch (error) {
+    console.error('Error fetching user profile:', error);
+    res.status(500).send({ message: 'Internal server error' });
+  }
 });
 
 app.get('/userprofile/:id',async(req,res)=>{
@@ -398,33 +402,34 @@ app.get('/userprofile/:id',async(req,res)=>{
 
 
 app.post('/userprofile', verifyToken, async (req, res) => {
-    try {
-        const profile = req.body;
-        
-        // Ensure the profile belongs to the authenticated user
-        if (profile.email !== req.user.email) {
-            return res.status(403).send({ message: "Forbidden" });
-        }
-
-        const existingProfile = await userProfileCollection.findOne({ email: profile.email });
-        
-        if (existingProfile) {
-            // Update existing profile
-            const result = await userProfileCollection.updateOne(
-                { email: profile.email },
-                { $set: profile }
-            );
-            res.send(result);
-        } else {
-            // Create new profile
-            profile.createdAt = new Date();
-            const result = await userProfileCollection.insertOne(profile);
-            res.send(result);
-        }
-    } catch (error) {
-        res.status(500).send({ message: "Server error" });
+  try {
+    const email = req.user.email; // From verified token
+    const profileData = req.body;
+    
+    // Check if profile already exists
+    const existingProfile = await userProfileCollection.findOne({ email });
+    
+    let result;
+    if (existingProfile) {
+      // Update existing profile
+      result = await userProfileCollection.updateOne(
+        { email },
+        { $set: profileData }
+      );
+    } else {
+      // Create new profile
+      profileData.email = email;
+      profileData.submissionDate = new Date().toISOString();
+      result = await userProfileCollection.insertOne(profileData);
     }
+    
+    res.send(result);
+  } catch (error) {
+    console.error('Error saving user profile:', error);
+    res.status(500).send({ message: 'Internal server error' });
+  }
 });
+
 
 
 app.patch('/userprofile/:id',async(req,res)=>{
@@ -462,7 +467,6 @@ app.delete('/userprofile/:id',async(req,res,async(req,res)=> {
   const result = await userProfileCollection.deleteOne(query)
   res.send(result);
 }))
-
 
 
 
