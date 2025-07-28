@@ -1,503 +1,483 @@
-
-
-
-
 const express = require('express');
 const app = express();
-
 const cors = require('cors');
 const jwt = require('jsonwebtoken');
-
-require('dotenv').config()
+require('dotenv').config();
 
 const port = process.env.PORT || 5100;
 
-// middleware
-app.use(cors());
+// Middleware
+app.use(cors({
+  origin: process.env.CORS_ORIGIN || '*',
+  credentials: true
+}));
 app.use(express.json());
-app.get("/",(req,res)=>{
-    res.send('boss is sitting on port 5100');
-})
 
-app.listen(port,()=>{
-    console.log(`Boss is sitting on port ${port}`);
-})
+// Basic route
+app.get("/", (req, res) => {
+  res.send('Server is running on port ' + port);
+});
 
-
-// mongodb+srv://zubaerislam703:vhaDZyizwjRL3tES@cluster0.obp5iwu.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0
-
-
-
+// MongoDB setup
 const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
 const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@cluster0.obp5iwu.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0`;
 
-// Create a MongoClient with a MongoClientOptions object to set the Stable API version
 const client = new MongoClient(uri, {
   serverApi: {
     version: ServerApiVersion.v1,
     strict: true,
     deprecationErrors: true,
-
   }
 });
 
-async function run() {
-  try {
-    // Connect the client to the server	(optional starting in v4.7)
-    // await client.connect();
-    
-
-    const userCollection = client.db("Doctor-House").collection("users");
-    const cartCollection = client.db("Doctor-House").collection("carts");
-    const menuCollection = client.db("Doctor-House").collection("menu")
-    const appointmentCollection = client.db("Doctor-House").collection("appointment")
-    const userProfileCollection = client.db("Doctor-House").collection("userprofile")
-
-
-   // jwt related api
-app.post('/jwt', async (req, res) => {
-    const user = req.body;
-    const token = jwt.sign(
-        { email: user.email }, // Only store necessary user info in token
-        process.env.ACCESS_TOKEN_SECRET,
-        { expiresIn: '1h' }
-    );
-    
-    // Set secure HTTP-only cookie
-    res.cookie('token', token, {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
-        sameSite: 'strict',
-        maxAge: 3600000 // 1 hour
-    });
-    
-    res.send({ success: true });
-});
-
-// Token verification middleware
+// JWT middleware
 const verifyToken = (req, res, next) => {
-    // Check for token in cookies first, then Authorization header
-    const token = req.cookies.token || req.headers.authorization?.split(' ')[1];
-    
-    if (!token) {
-        return res.status(401).send({ message: "Unauthorized access" });
+  const authHeader = req.headers.authorization;
+  if (!authHeader) {
+    return res.status(401).send({ message: 'Unauthorized access' });
+  }
+  const token = authHeader.split(' ')[1];
+  jwt.verify(token, process.env.ACCESS_TOKEN_SECRET, (err, decoded) => {
+    if (err) {
+      return res.status(401).send({ message: 'Unauthorized access' });
     }
-
-    jwt.verify(token, process.env.ACCESS_TOKEN_SECRET, (err, decoded) => {
-        if (err) {
-            return res.status(401).send({ message: "Invalid or expired token" });
-        }
-        req.user = decoded; // Attach decoded user to request
-        next();
-    });
+    req.decoded = decoded;
+    next();
+  });
 };
 
+// Verify admin middleware
+const verifyAdmin = async (req, res, next) => {
+  const email = req.decoded.email;
+  const query = { email: email };
+  const user = await client.db("Doctor-House").collection("users").findOne(query);
+  if (user?.role !== 'admin') {
+    return res.status(403).send({ message: 'Forbidden access' });
+  }
+  next();
+};
 
+// Database connection and routes
+async function run() {
+  try {
+    await client.connect();
+    console.log("Connected to MongoDB");
 
+    const db = client.db("Doctor-House");
+    const userCollection = db.collection("users");
+    const cartCollection = db.collection("carts");
+    const menuCollection = db.collection("menu");
+    const appointmentCollection = db.collection("appointment");
+    const userProfileCollection = db.collection("userprofile");
 
-// Now you can use:
-// verifyRole('admin'), verifyRole('doctor'), etc.
+    // JWT API
+    app.post('/jwt', (req, res) => {
+      const user = req.body;
+      const token = jwt.sign(
+        { email: user.email },
+        process.env.ACCESS_TOKEN_SECRET,
+        { expiresIn: '1h' }
+      );
+      res.send({ token });
+    });
 
-
-    // use verify admin after verify token
-    const verifyAdmin = async(req,res,next)=> {
-      const email = req.decoded.email;
-      const query = {email: email};
-      const user = await userCollection.findOne(query);
-      const isAdmin = user?.role === 'admin';
-      if(!isAdmin){
-        return res.status(403).send({message:'forbidden access'});
-      }
-      next();
-    }
-
-    // users related api
-    app.get('/users',verifyToken,verifyAdmin,async(req,res)=> {
+    // Users API
+    app.get('/users', verifyToken, verifyAdmin, async (req, res) => {
+      try {
         const result = await userCollection.find().toArray();
-        console.log(req.headers);
         res.send(result);
-    })
-
-    app.get('/users/admin/:email',verifyToken,async(req,res)=>{
-      const email = req.params.email;
-      if(email!=req.decoded.email){
-        return res.status(403).send({message:'forbidden access'});
+      } catch (error) {
+        console.error("Error fetching users:", error);
+        res.status(500).send({ message: 'Internal server error' });
       }
-      const query = {email: email};
-      const user = await userCollection.findOne(query);
-      let admin = false;
-      if(user){
-        admin = user?.role === 'admin';
-      }
-      res.send({admin});
-    })
+    });
 
-    app.post('/users',async(req,res)=> {
+    app.get('/users/admin/:email', verifyToken, async (req, res) => {
+      try {
+        const email = req.params.email;
+        if (email !== req.decoded.email) {
+          return res.status(403).send({ message: 'Forbidden access' });
+        }
+        const query = { email: email };
+        const user = await userCollection.findOne(query);
+        res.send({ admin: user?.role === 'admin' });
+      } catch (error) {
+        console.error("Error checking admin status:", error);
+        res.status(500).send({ message: 'Internal server error' });
+      }
+    });
+
+    app.post('/users', async (req, res) => {
+      try {
         const user = req.body;
-        // insert email if user does not exists
-        // you can do this many ways(1.email uniqye, 2.upsert , 3.simple checking)
-        const query = {email: user.email}
+        const query = { email: user.email };
         const existingUser = await userCollection.findOne(query);
-        if(existingUser){
-            return res.send({message: 'user already exists', insertedId:null})
+        if (existingUser) {
+          return res.send({ message: 'User already exists', insertedId: null });
         }
         const result = await userCollection.insertOne(user);
         res.send(result);
-    })
-
-
-    app.patch('/users/admin/:id',verifyToken,verifyAdmin,async(req,res)=>{
-      const id = req.params.id;
-      const filter = {_id: new ObjectId(id)};
-      const updateDoc = {
-        $set: {
-          role:'admin'
-        }
+      } catch (error) {
+        console.error("Error creating user:", error);
+        res.status(500).send({ message: 'Internal server error' });
       }
-      const result = await userCollection.updateOne(filter,updateDoc)
-      res.send(result);
-    })
- 
-
-    app.delete('/users/:id',verifyToken,verifyAdmin,async(req,res)=>{
-      const id = req.params.id;
-      const query = {_id: new ObjectId(id)}
-      const result = await userCollection.deleteOne(query);
-      res.send(result);
-    })
-
-
-
-    // userName
-
-    app.get('/users/username/:username',async(req,res)=>{
-      const username = req.params.username;
-      try{
-        const user = await userCollection.findOne({userName:username});
-
-        if(!user){
-          return res.status(404).send({message:'Username not found'})
-        }
-        res.send(user);   // return matched email
-        // res.send({email: user.email});   // return matched email
-
-      }
-      catch(error){
-        console.error("Error fatching email by username: ",error);
-        res.status(500).send({message:'Internal Server Error'});
-      }
-    })
-
-
-    // ⛑️ get user by email
-app.get('/updatemyprofile/:email', async (req, res) => {
-  const email = req.params.email;
-  try {
-    const user = await userCollection.findOne({ email });
-    if (!user) {
-      return res.status(404).send({ message: 'User not found' });
-    }
-    res.send(user);
-  } catch (error) {
-    console.error('Error fetching user profile:', error);
-    res.status(500).send({ message: 'Internal server error' });
-  }
-});
-
-
-
-    // carts collection
-
-    app.post('/carts',async(req,res)=> {
-      const cartItem = req.body;
-      const result = await cartCollection.insertOne(cartItem);
-      res.send(result);
-    })
-
-    app.delete('/carts/:id',async(req,res)=> {
-      const id = req.params.id;
-      const query = {_id: new ObjectId(id)}
-      const result = await cartCollection.deleteOne(query);
-      res.send(result);
-    })
-
-    app.get('/carts',async(req,res)=> {
-      // const result = await cartCollection.find().toArray();
-      const email = req.query.email;
-      const query = {email: email}
-      const result = await cartCollection.find(query).toArray();
-      res.send(result);
-
-    })
-
-
-    // menu related api
-    app.get('/menu',async(req,res)=> {
-      const result = await menuCollection.find().toArray();
-      res.send(result);
-    })
-
-    app.get('/menu/:id',async(req,res)=>{
-      const id = req.params.id;
-      const query = {_id: new ObjectId(id)}
-      const result = await menuCollection.findOne(query);
-      res.send(result);
-    })
-
-    app.post('/menu',async(req,res)=>{
-      const item = req.body;
-      const result = await menuCollection.insertOne(item);
-      res.send(result);
-    })
-
-    app.patch('/menu/:id',async(req,res)=> {
-      const item = req.body;
-      const id = req.params.id;
-      const filter = {_id: new ObjectId(id)}
-      const updateDoc = {
-        $set: {
-          name:item.name,
-          image:item.image,
-          price:item.price,
-          specialist:item.specialist,
-          locationn:item.locationn,
-          available: item.available,
-          details:item.details
-        }
-      }
-      const result = await menuCollection.updateOne(filter,updateDoc)
-      res.send(result);
-    })
-
-    app.delete('/menu/:id',verifyToken,verifyAdmin,async(req,res)=>{
-      const id = req.params.id;
-      const query = {_id: new ObjectId(id)}
-      const result = await menuCollection.deleteOne(query)
-      res.send(result);
-    })
-
-
-
-// appointment Collection api
-// Get all appointments for the logged-in user
-// Appointment API endpoints
-app.get('/appointments', verifyToken, async (req, res) => {
-  try {
-    const email = req.decoded.email;
-    const result = await appointmentCollection.find({ patientEmail: email }).toArray();
-    res.send(result);
-  } catch (error) {
-    console.error("Error fetching appointments:", error);
-    res.status(500).send({ error: "Internal server error" });
-  }
-});
-
-app.post('/appointments', verifyToken, async (req, res) => {
-  try {
-    const appointment = req.body;
-    
-    // Validate required fields
-    if (!appointment.doctorId || !appointment.appointmentDate) {
-      return res.status(400).send({ error: "Missing required fields" });
-    }
-    
-    // Set patient email from authenticated user
-    appointment.patientEmail = req.decoded.email;
-    appointment.status = 'pending';
-    
-    const result = await appointmentCollection.insertOne(appointment);
-    res.send(result);
-  } catch (error) {
-    console.error("Error creating appointment:", error);
-    res.status(500).send({ error: "Internal server error" });
-  }
-});
-
-app.patch('/appointments/:id', verifyToken, async (req, res) => {
-  try {
-    const item = req.body;
-    const id = req.params.id;
-    const email = req.decoded.email;
-    
-    // Verify appointment belongs to user
-    const existingAppointment = await appointmentCollection.findOne({ 
-      _id: new ObjectId(id),
-      patientEmail: email
     });
-    
-    if (!existingAppointment) {
-      return res.status(403).send({ error: "Access denied" });
-    }
 
-    const filter = { _id: new ObjectId(id) };
-    const updateDoc = {
-      $set: {
-        patientName: item.name,
-        patientAge: item.age,
-        patientPhone: item.phone,
-        appointmentDate: item.date,
-        appointmentTime: item.time,
-        message: item.message,
+    app.patch('/users/admin/:id', verifyToken, verifyAdmin, async (req, res) => {
+      try {
+        const id = req.params.id;
+        const filter = { _id: new ObjectId(id) };
+        const updateDoc = { $set: { role: 'admin' } };
+        const result = await userCollection.updateOne(filter, updateDoc);
+        res.send(result);
+      } catch (error) {
+        console.error("Error updating user role:", error);
+        res.status(500).send({ message: 'Internal server error' });
       }
-    };
-    
-    const result = await appointmentCollection.updateOne(filter, updateDoc);
-    res.send(result);
-  } catch (error) {
-    console.error("Error updating appointment:", error);
-    res.status(500).send({ error: "Internal server error" });
-  }
-});
-
-app.delete('/appointments/:id', verifyToken, async (req, res) => {
-  try {
-    const id = req.params.id;
-    const email = req.decoded.email;
-    
-    // Verify appointment belongs to user
-    const existingAppointment = await appointmentCollection.findOne({ 
-      _id: new ObjectId(id),
-      patientEmail: email
     });
-    
-    if (!existingAppointment) {
-      return res.status(403).send({ error: "Access denied" });
-    }
 
-    const query = { _id: new ObjectId(id) };
-    const result = await appointmentCollection.deleteOne(query);
-    res.send(result);
-  } catch (error) {
-    console.error("Error deleting appointment:", error);
-    res.status(500).send({ error: "Internal server error" });
-  }
-});
+    app.delete('/users/:id', verifyToken, verifyAdmin, async (req, res) => {
+      try {
+        const id = req.params.id;
+        const query = { _id: new ObjectId(id) };
+        const result = await userCollection.deleteOne(query);
+        res.send(result);
+      } catch (error) {
+        console.error("Error deleting user:", error);
+        res.status(500).send({ message: 'Internal server error' });
+      }
+    });
 
+    // Username API
+    app.get('/users/username/:username', async (req, res) => {
+      try {
+        const username = req.params.username;
+        const user = await userCollection.findOne({ userName: username });
+        if (!user) {
+          return res.status(404).send({ message: 'Username not found' });
+        }
+        res.send(user);
+      } catch (error) {
+        console.error("Error fetching user by username:", error);
+        res.status(500).send({ message: 'Internal server error' });
+      }
+    });
 
+    // User profile API
+    app.get('/updatemyprofile/:email', verifyToken, async (req, res) => {
+      try {
+        const email = req.params.email;
+        if (email !== req.decoded.email) {
+          return res.status(403).send({ message: 'Forbidden access' });
+        }
+        const user = await userCollection.findOne({ email });
+        if (!user) {
+          return res.status(404).send({ message: 'User not found' });
+        }
+        res.send(user);
+      } catch (error) {
+        console.error('Error fetching user profile:', error);
+        res.status(500).send({ message: 'Internal server error' });
+      }
+    });
 
+    // Cart API
+    app.post('/carts', verifyToken, async (req, res) => {
+      try {
+        const cartItem = req.body;
+        cartItem.userEmail = req.decoded.email;
+        const result = await cartCollection.insertOne(cartItem);
+        res.send(result);
+      } catch (error) {
+        console.error("Error adding to cart:", error);
+        res.status(500).send({ message: 'Internal server error' });
+      }
+    });
 
-// userProfile collection
-app.get('/userprofile', verifyToken, async (req, res) => {
-  try {
-    const email = req.user.email; // From verified token
-    const profile = await userProfileCollection.findOne({ email });
-    
-    if (!profile) {
-      return res.status(404).send({ message: 'Profile not found' });
-    }
-    
-    res.send(profile);
-  } catch (error) {
-    console.error('Error fetching user profile:', error);
-    res.status(500).send({ message: 'Internal server error' });
-  }
-});
+    app.get('/carts', verifyToken, async (req, res) => {
+      try {
+        const email = req.decoded.email;
+        const query = { userEmail: email };
+        const result = await cartCollection.find(query).toArray();
+        res.send(result);
+      } catch (error) {
+        console.error("Error fetching cart:", error);
+        res.status(500).send({ message: 'Internal server error' });
+      }
+    });
 
-app.get('/userprofile/:id',async(req,res)=>{
-  const id = req.params.id;
-  const query = {_id: new ObjectId(id)}
-  const result = await userProfileCollection.findOne(query);
-  res.send(result);
-})
+    app.delete('/carts/:id', verifyToken, async (req, res) => {
+      try {
+        const id = req.params.id;
+        const query = { _id: new ObjectId(id), userEmail: req.decoded.email };
+        const result = await cartCollection.deleteOne(query);
+        if (result.deletedCount === 0) {
+          return res.status(404).send({ message: 'Item not found in your cart' });
+        }
+        res.send(result);
+      } catch (error) {
+        console.error("Error deleting cart item:", error);
+        res.status(500).send({ message: 'Internal server error' });
+      }
+    });
 
+    // Menu API
+    app.get('/menu', async (req, res) => {
+      try {
+        const result = await menuCollection.find().toArray();
+        res.send(result);
+      } catch (error) {
+        console.error("Error fetching menu:", error);
+        res.status(500).send({ message: 'Internal server error' });
+      }
+    });
 
-app.post('/userprofile', verifyToken, async (req, res) => {
-  try {
-    const email = req.user.email; // From verified token
-    const profileData = req.body;
-    
-    // Check if profile already exists
-    const existingProfile = await userProfileCollection.findOne({ email });
-    
-    let result;
-    if (existingProfile) {
-      // Update existing profile
-      result = await userProfileCollection.updateOne(
-        { email },
-        { $set: profileData }
-      );
-    } else {
-      // Create new profile
-      profileData.email = email;
-      profileData.submissionDate = new Date().toISOString();
-      result = await userProfileCollection.insertOne(profileData);
-    }
-    
-    res.send(result);
-  } catch (error) {
-    console.error('Error saving user profile:', error);
-    res.status(500).send({ message: 'Internal server error' });
-  }
-});
+    app.get('/menu/:id', async (req, res) => {
+      try {
+        const id = req.params.id;
+        const query = { _id: new ObjectId(id) };
+        const result = await menuCollection.findOne(query);
+        if (!result) {
+          return res.status(404).send({ message: 'Item not found' });
+        }
+        res.send(result);
+      } catch (error) {
+        console.error("Error fetching menu item:", error);
+        res.status(500).send({ message: 'Internal server error' });
+      }
+    });
 
+    app.post('/menu', verifyToken, verifyAdmin, async (req, res) => {
+      try {
+        const item = req.body;
+        const result = await menuCollection.insertOne(item);
+        res.send(result);
+      } catch (error) {
+        console.error("Error adding menu item:", error);
+        res.status(500).send({ message: 'Internal server error' });
+      }
+    });
 
+    app.patch('/menu/:id', verifyToken, verifyAdmin, async (req, res) => {
+      try {
+        const item = req.body;
+        const id = req.params.id;
+        const filter = { _id: new ObjectId(id) };
+        const updateDoc = {
+          $set: {
+            name: item.name,
+            image: item.image,
+            price: item.price,
+            specialist: item.specialist,
+            location: item.location,
+            available: item.available,
+            details: item.details
+          }
+        };
+        const result = await menuCollection.updateOne(filter, updateDoc);
+        res.send(result);
+      } catch (error) {
+        console.error("Error updating menu item:", error);
+        res.status(500).send({ message: 'Internal server error' });
+      }
+    });
 
-app.patch('/userprofile/:id',async(req,res)=>{
-  const item = req.body;
-  const id = req.params.id;
-  const filter = {_id: new ObjectId(id)}
-  const updateDoc = {
-   
-    $set: {
-       fullName : item.fullname,
-    userName : item.username,
-    userImage: userImage,
-    Email: item.email,
-    NID: item.nid,
-    Gender: item.gender,
-    bloodGroup: item.bloodGroup,
-    EmergencyName: item.EmergencyName,
-    EmergencyRelationship: item.EmergencyRelationship,
-    EmergencyNumber: item.EmergencyNumber,
-    }
+    app.delete('/menu/:id', verifyToken, verifyAdmin, async (req, res) => {
+      try {
+        const id = req.params.id;
+        const query = { _id: new ObjectId(id) };
+        const result = await menuCollection.deleteOne(query);
+        res.send(result);
+      } catch (error) {
+        console.error("Error deleting menu item:", error);
+        res.status(500).send({ message: 'Internal server error' });
+      }
+    });
 
+    // Appointment API
+    app.get('/appointments', verifyToken, async (req, res) => {
+      try {
+        const email = req.decoded.email;
+        const result = await appointmentCollection.find({ patientEmail: email }).toArray();
+        res.send(result);
+      } catch (error) {
+        console.error("Error fetching appointments:", error);
+        res.status(500).send({ message: 'Internal server error' });
+      }
+    });
 
+    app.post('/appointments', verifyToken, async (req, res) => {
+      try {
+        const appointment = req.body;
+        if (!appointment.doctorId || !appointment.appointmentDate) {
+          return res.status(400).send({ message: 'Missing required fields' });
+        }
+        appointment.patientEmail = req.decoded.email;
+        appointment.status = 'pending';
+        const result = await appointmentCollection.insertOne(appointment);
+        res.send(result);
+      } catch (error) {
+        console.error("Error creating appointment:", error);
+        res.status(500).send({ message: 'Internal server error' });
+      }
+    });
 
-  }
+    app.patch('/appointments/:id', verifyToken, async (req, res) => {
+      try {
+        const item = req.body;
+        const id = req.params.id;
+        const filter = { _id: new ObjectId(id), patientEmail: req.decoded.email };
+        const updateDoc = {
+          $set: {
+            patientName: item.name,
+            patientAge: item.age,
+            patientPhone: item.phone,
+            appointmentDate: item.date,
+            appointmentTime: item.time,
+            message: item.message,
+          }
+        };
+        const result = await appointmentCollection.updateOne(filter, updateDoc);
+        if (result.matchedCount === 0) {
+          return res.status(404).send({ message: 'Appointment not found' });
+        }
+        res.send(result);
+      } catch (error) {
+        console.error("Error updating appointment:", error);
+        res.status(500).send({ message: 'Internal server error' });
+      }
+    });
 
-  const result = await userProfileCollection.updateOne(filter,updateDoc)
-  res.send(result);
+    app.delete('/appointments/:id', verifyToken, async (req, res) => {
+      try {
+        const id = req.params.id;
+        const query = { _id: new ObjectId(id), patientEmail: req.decoded.email };
+        const result = await appointmentCollection.deleteOne(query);
+        if (result.deletedCount === 0) {
+          return res.status(404).send({ message: 'Appointment not found' });
+        }
+        res.send(result);
+      } catch (error) {
+        console.error("Error deleting appointment:", error);
+        res.status(500).send({ message: 'Internal server error' });
+      }
+    });
 
-})
+    // User Profile API
+    app.get('/userprofile', verifyToken, async (req, res) => {
+      try {
+        const email = req.decoded.email;
+        const profile = await userProfileCollection.findOne({ email });
+        if (!profile) {
+          return res.status(404).send({ message: 'Profile not found' });
+        }
+        res.send(profile);
+      } catch (error) {
+        console.error('Error fetching user profile:', error);
+        res.status(500).send({ message: 'Internal server error' });
+      }
+    });
 
+    app.get('/userprofile/:id', verifyToken, async (req, res) => {
+      try {
+        const id = req.params.id;
+        const query = { _id: new ObjectId(id) };
+        const result = await userProfileCollection.findOne(query);
+        if (!result) {
+          return res.status(404).send({ message: 'Profile not found' });
+        }
+        res.send(result);
+      } catch (error) {
+        console.error("Error fetching profile:", error);
+        res.status(500).send({ message: 'Internal server error' });
+      }
+    });
 
-app.patch('/userprofile', verifyToken, async (req, res) => {
-    try {
-        const email = req.user.email;
+    app.post('/userprofile', verifyToken, async (req, res) => {
+      try {
+        const email = req.decoded.email;
         const profileData = req.body;
+        profileData.email = email;
         
-        const result = await userProfileCollection.updateOne(
+        const existingProfile = await userProfileCollection.findOne({ email });
+        let result;
+        
+        if (existingProfile) {
+          result = await userProfileCollection.updateOne(
             { email },
             { $set: profileData }
-        );
+          );
+        } else {
+          result = await userProfileCollection.insertOne(profileData);
+        }
         
         res.send(result);
-    } catch (error) {
-        console.error('Error updating user profile:', error);
+      } catch (error) {
+        console.error('Error saving user profile:', error);
         res.status(500).send({ message: 'Internal server error' });
-    }
-});
+      }
+    });
 
+    app.patch('/userprofile/:id', verifyToken, async (req, res) => {
+      try {
+        const item = req.body;
+        const id = req.params.id;
+        const filter = { _id: new ObjectId(id), email: req.decoded.email };
+        const updateDoc = {
+          $set: {
+            fullName: item.fullname,
+            userName: item.username,
+            userImage: item.userImage,
+            Email: item.email,
+            NID: item.nid,
+            Gender: item.gender,
+            bloodGroup: item.bloodGroup,
+            EmergencyName: item.EmergencyName,
+            EmergencyRelationship: item.EmergencyRelationship,
+            EmergencyNumber: item.EmergencyNumber,
+          }
+        };
+        const result = await userProfileCollection.updateOne(filter, updateDoc);
+        if (result.matchedCount === 0) {
+          return res.status(404).send({ message: 'Profile not found' });
+        }
+        res.send(result);
+      } catch (error) {
+        console.error("Error updating profile:", error);
+        res.status(500).send({ message: 'Internal server error' });
+      }
+    });
 
-app.delete('/userprofile/:id',async(req,res,async(req,res)=> {
-  const id = req.params.id;
-  const query = {_id: new ObjectId(id)}
-  const result = await userProfileCollection.deleteOne(query)
-  res.send(result);
-}))
+    app.delete('/userprofile/:id', verifyToken, async (req, res) => {
+      try {
+        const id = req.params.id;
+        const query = { _id: new ObjectId(id), email: req.decoded.email };
+        const result = await userProfileCollection.deleteOne(query);
+        if (result.deletedCount === 0) {
+          return res.status(404).send({ message: 'Profile not found' });
+        }
+        res.send(result);
+      } catch (error) {
+        console.error("Error deleting profile:", error);
+        res.status(500).send({ message: 'Internal server error' });
+      }
+    });
 
+    // Error handling middleware
+    app.use((err, req, res, next) => {
+      console.error(err.stack);
+      res.status(500).send({ message: 'Something broke!', error: err.message });
+    });
 
+    // Start server
+    app.listen(port, () => {
+      console.log(`Server is running on port ${port}`);
+    });
 
-   
-    // Send a ping to confirm a successful connection
-    // await client.db("admin").command({ ping: 1 });
-    // console.log("Pinged your deployment. You successfully connected to MongoDB!");
-    //  module.exports = app;
-  } finally {
-    // Ensures that the client will close when you finish/error
-    // await client.close();
+  } catch (error) {
+    console.error("Failed to connect to MongoDB:", error);
+    process.exit(1);
   }
 }
-run().catch(console.dir);
 
-
+run().catch(console.error);
